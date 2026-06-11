@@ -1,6 +1,6 @@
 # cordic-math
 
-`math.h` drop-in for cnav on the STM32G4, backed by the CORDIC
+`math.h` drop-in on the STM32G4, backed by the CORDIC
 coprocessor, with a bit-exact host emulation of the engine for unit
 testing on the build host.
 

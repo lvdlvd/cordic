@@ -35,7 +35,6 @@ extern float cm_powf(float, float);
 extern float cm_fmodf(float, float);
 extern float cm_fabsf(float);
 extern float cm_roundf(float);
-extern void  cordic_math_init(void);
 
 static int g_fail, g_checks;
 
@@ -95,12 +94,12 @@ static void chk_bits(const char *what, float in1, float in2,
 
 /* ---- error budgets (see README) --------------------------------------- */
 
-#define B_SINCOS   4e-6    /* abs:  2^-19 engine + reduction slop          */
-#define B_ATAN2    8e-6    /* abs:  2^-19 * pi                             */
-#define B_HYPOT    1.5e-5  /* rel:  2^-19 on prescaled modulus >= 0.25     */
-#define B_SQRT     1.5e-5  /* rel                                          */
-#define B_LOG      3e-5    /* abs:  2^-18 * 4 (SCALE=1, x4 result scaling) */
-#define B_EXP      4e-5    /* rel                                          */
+static const double B_SINCOS = 4e-6;   /* abs: 2^-19 engine + reduction slop          */
+static const double B_ATAN2  = 8e-6;   /* abs: 2^-19 * pi                             */
+static const double B_HYPOT  = 1.5e-5; /* rel: 2^-19 on prescaled modulus >= 0.25     */
+static const double B_SQRT   = 1.5e-5; /* rel                                         */
+static const double B_LOG    = 3e-5;   /* abs: 2^-18 * 4 (SCALE=1, x4 result scaling) */
+static const double B_EXP    = 4e-5;   /* rel                                         */
 
 /* ---- sweeps ------------------------------------------------------------ */
 
@@ -346,7 +345,6 @@ static void test_specials(void)
 int main(void)
 {
     rng_state = 0xC0FFEE42u;
-    cordic_math_init();
 
     test_exact_funcs();
     test_trig();

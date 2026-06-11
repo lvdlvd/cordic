@@ -7,8 +7,7 @@
  * above this line is shared code, so any host/device divergence can only
  * originate inside the backend — which is the point of the design.
  */
-#ifndef CORDIC_PORT_H
-#define CORDIC_PORT_H
+#pragma once
 
 #include <stdint.h>
 
@@ -32,10 +31,13 @@ enum {
 };
 
 /* Compose a CSR image. precision = iterations/4 (1..15), scale = 0..7. */
-#define CM_CSR(func, precision, scale, two_args, two_res)            \
-    ((uint32_t)(func) | ((uint32_t)(precision) << 4) |               \
-     ((uint32_t)(scale) << 8) |                                      \
-     ((two_args) ? CM_CSR_NARGS : 0u) | ((two_res) ? CM_CSR_NRES : 0u))
+static inline uint32_t cm_csr(enum cm_func func, unsigned precision,
+                              unsigned scale, int two_args, int two_res)
+{
+    return (uint32_t)func | (precision << 4) | (scale << 8) |
+           (two_args ? (uint32_t)CM_CSR_NARGS : 0u) |
+           (two_res ? (uint32_t)CM_CSR_NRES : 0u);
+}
 
 /* PRECISION values used by the frontend — shared by construction.
  * Per RM0440 Table 115 these reach the engine's q1.23 quantization floor. */
@@ -55,5 +57,3 @@ enum {
  * or by math_emul.c (software q1.23 engine).
  */
 void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2]);
-
-#endif /* CORDIC_PORT_H */

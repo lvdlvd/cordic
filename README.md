@@ -1,16 +1,15 @@
 # cordic-math
 
-`math.h` drop-in on the STM32G4, backed by the CORDIC
+`math.h` drop-in for cnav on the STM32G4, backed by the CORDIC
 coprocessor, with a bit-exact host emulation of the engine for unit
 testing on the build host.
 
 ```
-include/math.h              drop-in header 
+include/math.h              drop-in header (the 12 cnav functions + sincosf)
 src/cordic_math.c           shared frontend — float layer, backend-agnostic
 src/cordic_port.h           backend ABI (CSR image + q1.31 args/results)
 src/math_stm32.c            device backend: CORDIC registers, zero-overhead mode
 src/math_emul.c             host backend: software model of the 24-bit engine
-src/cordic_emul_tuning.h    knobs isolating undocumented silicon choices
 test/test_math.c            host conformance suite (vs. double-precision libm)
 test/device_dump.c          deterministic vector dumper (host + device builds)
 Makefile                    host test build; device flags documented inside
@@ -113,7 +112,8 @@ semantics) and reproduces every documented range limit exactly
 (ln ≤ 9.35 ⇔ hyperbolic convergence bound 1.118; sqrt ≥ 0.027 ⇔
 0.25·e^-2.236; atan ≤ 128 ⇔ Σatan 2^-i = 1.743). The remaining
 micro-architecture choices (narrowing/table rounding, gain placement,
-repeat schedule) are isolated in `src/cordic_emul_tuning.h`.
+repeat schedule) are isolated in the calibration enum at the head of
+`src/math_emul.c`.
 
 To confirm or calibrate bit-exactness on real silicon:
 
@@ -130,7 +130,7 @@ corresponding knob and re-diff.
 
 ## Concurrency
 
-The CORDIC is a global resource. Runtime shoul guarantee single
-thread, no floating point in IRQ handlers `math_stm32.c` performs no
+The CORDIC is a global resource. Per cnav's runtime guarantee (single
+thread, no floating point in IRQ handlers) `math_stm32.c` performs no
 locking. If that guarantee ever changes, wrap `cordic_backend_run` in a
 critical section.

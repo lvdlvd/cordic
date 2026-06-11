@@ -24,7 +24,7 @@ all: test
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: src/%.c src/cordic_port.h src/cordic_emul_tuning.h include/math.h | $(BUILD)
+$(BUILD)/%.o: src/%.c src/cordic_port.h include/math.h | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -DCORDIC_MATH_PREFIX -c $< -o $@
 
 # test_math.c uses the SYSTEM <math.h>; only extern cm_* declarations.

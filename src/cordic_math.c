@@ -36,6 +36,8 @@ typedef union { float f; uint32_t u; int32_t i; } f32bits;
 static inline uint32_t f2u(float f)    { f32bits v; v.f = f; return v.u; }
 static inline float    u2f(uint32_t u) { f32bits v; v.u = u; return v.f; }
 
+/* Kept as #defines: 0x80000000 exceeds INT_MAX, so these uint32_t masks
+ * cannot portably be C11 enum constants. */
 #define F32_SIGN  0x80000000u
 #define F32_EXPM  0x7F800000u
 #define F32_MANM  0x007FFFFFu
@@ -55,7 +57,10 @@ static inline float cm_copysign(float m, float s)
  * bit-equality. The cost is that no FE_INVALID exception is raised; the
  * project does not use fenv.
  */
-#define CM_QNAN     (u2f(0x7FC00000u))            /* canonical quiet NaN */
+static inline float cm_qnan(void)                /* canonical quiet NaN */
+{
+    return u2f(0x7FC00000u);
+}
 static inline float quiet_nan_of(float x)         /* quiet, keep payload */
 {
     return u2f(f2u(x) | 0x00400000u);
@@ -149,7 +154,7 @@ float fmodf(float x, float y)
     if (is_nan_u(ux)) return quiet_nan_of(x);
     if (is_nan_u(uy)) return quiet_nan_of(y);
     if ((uy << 1) == 0 || ex == 0xFF)
-        return CM_QNAN;                          /* fmod(x,0), fmod(inf,y) */
+        return cm_qnan();                          /* fmod(x,0), fmod(inf,y) */
     if ((ux << 1) <= (uy << 1)) {
         if ((ux << 1) == (uy << 1)) return cm_copysign(0.0f, x);
         return x;                                /* |x| < |y| */
@@ -189,11 +194,11 @@ float fmodf(float x, float y)
 /* pi split for Cody-Waite reduction. P1/P2 carry 12 significant bits each
  * so n*P1 and n*P2 are EXACT float products for |n| < 2^12, keeping the
  * reduction error ~2e-7 for |x| up to ~4096*pi. */
-#define CM_PI_P1    3.140625f                   /* 0x1.92p+1        */
-#define CM_PI_P2    9.67502593994140625e-4f     /* 0x1.fb4p-11      */
-#define CM_PI_P3    1.50995802528086636e-7f     /* 0x1.4442d2p-23   */
-#define CM_INV_PI   0.318309873342514038086f    /* 1/pi rounded     */
-#define CM_PI_F     3.14159274101257324219f     /* pi rounded to f32 */
+static const float CM_PI_P1  = 3.140625f;                /* 0x1.92p+1         */
+static const float CM_PI_P2  = 9.67502593994140625e-4f;  /* 0x1.fb4p-11       */
+static const float CM_PI_P3  = 1.50995802528086636e-7f;  /* 0x1.4442d2p-23    */
+static const float CM_INV_PI = 0.318309873342514038086f; /* 1/pi rounded      */
+static const float CM_PI_F   = 3.14159274101257324219f;  /* pi rounded to f32 */
 
 /*
  * Reduce x to r = x - n*pi with |r| <= pi/2 (+ a few ulp); returns r and
@@ -226,7 +231,7 @@ static void cordic_sincos_q31(int32_t angle_over_pi, int32_t *s, int32_t *c)
     int32_t args[2], res[2];
     args[0] = angle_over_pi;
     args[1] = INT32_MAX;                          /* modulus m = 1 - 2^-31 */
-    cordic_backend_run(CM_CSR(CM_FUNC_SIN, CM_PREC_TRIG, 0, 1, 1), args, res);
+    cordic_backend_run(cm_csr(CM_FUNC_SIN, CM_PREC_TRIG, 0, 1, 1), args, res);
     *s = res[0];
     *c = res[1];
 }
@@ -328,7 +333,7 @@ float atan2f(float y, float x)
     (void)prescale_pair(x, y, &sx, &sy);          /* phase is scale-invariant */
     args[0] = f2q31(sx);
     args[1] = f2q31(sy);
-    cordic_backend_run(CM_CSR(CM_FUNC_PHASE, CM_PREC_TRIG, 0, 1, 0), args, res);
+    cordic_backend_run(cm_csr(CM_FUNC_PHASE, CM_PREC_TRIG, 0, 1, 0), args, res);
     /* For y != 0 the sign of atan2 is the sign of y. Enforcing it here
      * repairs two engine artifacts at once: the documented wrap of
      * results near +pi to -pi (RM0440 §17.3.2), and the loss of y's sign
@@ -353,7 +358,7 @@ float hypotf(float x, float y)
     k = prescale_pair(x, y, &sx, &sy);            /* sum of squares <= 0.5 */
     args[0] = f2q31(sx);
     args[1] = f2q31(sy);
-    cordic_backend_run(CM_CSR(CM_FUNC_MOD, CM_PREC_TRIG, 0, 1, 0), args, res);
+    cordic_backend_run(cm_csr(CM_FUNC_MOD, CM_PREC_TRIG, 0, 1, 0), args, res);
     return scale2(q31_2f(res[0]), k);
 }
 
@@ -370,7 +375,7 @@ float sqrtf(float x)
 
     if (is_nan_u(u)) return quiet_nan_of(x);
     if ((u << 1) == 0) return x;                  /* +-0 */
-    if (u & F32_SIGN) return CM_QNAN;             /* negative -> NaN */
+    if (u & F32_SIGN) return cm_qnan();             /* negative -> NaN */
     if (is_inf_u(u)) return x;
 
     e = frexp1(x, &f);                            /* x = f*2^e, f in [1,2) */
@@ -380,11 +385,11 @@ float sqrtf(float x)
 
     if (f < 0.75f) {                              /* SCALE=0 window */
         args[0] = f2q31(f);
-        cordic_backend_run(CM_CSR(CM_FUNC_SQRT, CM_PREC_SQRT, 0, 0, 0), args, res);
+        cordic_backend_run(cm_csr(CM_FUNC_SQRT, CM_PREC_SQRT, 0, 0, 0), args, res);
         r = q31_2f(res[0]);
     } else {                                      /* SCALE=1 window */
         args[0] = f2q31(f * 0.5f);
-        cordic_backend_run(CM_CSR(CM_FUNC_SQRT, CM_PREC_SQRT, 1, 0, 0), args, res);
+        cordic_backend_run(cm_csr(CM_FUNC_SQRT, CM_PREC_SQRT, 1, 0, 0), args, res);
         r = q31_2f(res[0]) * 2.0f;
     }
     return scale2(r, k);
@@ -395,9 +400,9 @@ float sqrtf(float x)
 /* ---------------------------------------------------------------------- */
 
 /* ln2 split (musl float constants) */
-#define CM_LN2_HI   0.693145751953125f           /* 0x1.62e4p-1   */
-#define CM_LN2_LO   1.42860676533018518e-6f      /* 0x1.7f7d1cp-20 */
-#define CM_INV_LN2  1.44269502162933349609f
+static const float CM_LN2_HI  = 0.693145751953125f;      /* 0x1.62e4p-1    */
+static const float CM_LN2_LO  = 1.42860676533018518e-6f; /* 0x1.7f7d1cp-20 */
+static const float CM_INV_LN2 = 1.44269502162933349609f;
 
 float logf(float x)
 {
@@ -408,7 +413,7 @@ float logf(float x)
 
     if (is_nan_u(u)) return quiet_nan_of(x);
     if ((u << 1) == 0) return -INFINITY;          /* log(+-0) = -inf */
-    if (u & F32_SIGN) return CM_QNAN;             /* negative -> NaN */
+    if (u & F32_SIGN) return cm_qnan();             /* negative -> NaN */
     if (is_inf_u(u)) return x;
     if (x == 1.0f) return 0.0f;                   /* exact, expected by callers */
 
@@ -416,7 +421,7 @@ float logf(float x)
 
     /* LN, SCALE=1: ARG1 = m*2^-1, RES1 = 2^-2 * ln m */
     args[0] = f2q31(f * 0.25f);                   /* (f/2) * 2^-1 */
-    cordic_backend_run(CM_CSR(CM_FUNC_LN, CM_PREC_HYP, 1, 0, 0), args, res);
+    cordic_backend_run(cm_csr(CM_FUNC_LN, CM_PREC_HYP, 1, 0, 0), args, res);
     lnm = q31_2f(res[0]) * 4.0f;                  /* ln(f/2), in [-ln2, 0) */
 
     return (float)k * CM_LN2_HI + (lnm + (float)k * CM_LN2_LO);
@@ -439,7 +444,7 @@ float log1pf(float x)
 
     if (is_nan_u(u)) return quiet_nan_of(x);
     if (x == -1.0f) return -INFINITY;
-    if (x < -1.0f) return CM_QNAN;
+    if (x < -1.0f) return cm_qnan();
     if (1.0f + x == 1.0f) return x;               /* tiny |x|, keeps sign of 0 */
     return logf(1.0f + x);
 }
@@ -469,7 +474,7 @@ float expf(float x)
     /* COSH, SCALE=1: ARG1 = r*2^-1; RES1 = cosh(r)/2, RES2 = sinh(r)/2.
      * e^r = cosh r + sinh r; the q1.31 sum is exact (<= 0.71 + headroom). */
     args[0] = f2q31(r * 0.5f);
-    cordic_backend_run(CM_CSR(CM_FUNC_COSH, CM_PREC_HYP, 1, 0, 1), args, res);
+    cordic_backend_run(cm_csr(CM_FUNC_COSH, CM_PREC_HYP, 1, 0, 1), args, res);
     er = q31_2f(res[0] + res[1]) * 2.0f;
 
     return scale2(er, (int)k);
@@ -524,21 +529,9 @@ float powf(float x, float y)
         return (uy & F32_SIGN) ? 0.0f : INFINITY;
     }
     if (ux & F32_SIGN) {
-        if (yk == 0) return CM_QNAN;              /* neg ^ non-integer: NaN */
+        if (yk == 0) return cm_qnan();              /* neg ^ non-integer: NaN */
         r = expf(y * logf(fabsf(x)));
         return (yk == 1) ? -r : r;
     }
     return expf(y * logf(x));
-}
-
-/* ---------------------------------------------------------------------- */
-/* init                                                                   */
-/* ---------------------------------------------------------------------- */
-
-/* Backend provides the real work (RCC clock enable on device, no-op host) */
-void cordic_backend_init(void);
-
-void cordic_math_init(void)
-{
-    cordic_backend_init();
 }

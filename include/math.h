@@ -11,8 +11,7 @@
  *   -ffp-contract=off, no -ffast-math, default IEEE rounding,
  *   FPSCR flush-to-zero left disabled on the device.
  */
-#ifndef CORDIC_MATH_H
-#define CORDIC_MATH_H
+#pragma once
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,13 +81,10 @@ float roundf(float x);
  * both for the price of one operation (GNU sincosf signature). */
 void sincosf(float x, float *s, float *c);
 
-/* One-time init hook; currently a no-op on both backends. NOTE: on the
- * device, the application must enable the CORDIC peripheral clock (RCC
- * AHB1, CORDICEN) before using this library. */
-void cordic_math_init(void);
+/* NOTE: on the device, the application must enable the CORDIC peripheral
+ * clock (RCC AHB1, CORDICEN) before using this library. There is no init
+ * function. */
 
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* CORDIC_MATH_H */

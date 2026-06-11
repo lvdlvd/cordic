@@ -30,23 +30,22 @@ struct cm_cordic_regs {
     __I  uint32_t RDATA;   /* 0x08 result(s),   r/o */
 };
 
-#define CM_CORDIC   ((struct cm_cordic_regs *)0x40020C00u)
+enum { CM_CORDIC_BASE = 0x40020C00 };
 
-void cordic_backend_init(void)
+static inline struct cm_cordic_regs *cm_cordic(void)
 {
-    /* Intentionally empty: peripheral clock enable is the application's
-     * responsibility (see PRECONDITION above). */
+    return (struct cm_cordic_regs *)(uintptr_t)CM_CORDIC_BASE;
 }
 
 void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
 {
-    CM_CORDIC->CSR = csr;
-    CM_CORDIC->WDATA = (uint32_t)args[0];
+    cm_cordic()->CSR = csr;
+    cm_cordic()->WDATA = (uint32_t)args[0];
     if (csr & CM_CSR_NARGS)
-        CM_CORDIC->WDATA = (uint32_t)args[1];
+        cm_cordic()->WDATA = (uint32_t)args[1];
 
     /* read stalls until the calculation completes */
-    res[0] = (int32_t)CM_CORDIC->RDATA;
+    res[0] = (int32_t)cm_cordic()->RDATA;
     if (csr & CM_CSR_NRES)
-        res[1] = (int32_t)CM_CORDIC->RDATA;
+        res[1] = (int32_t)cm_cordic()->RDATA;
 }

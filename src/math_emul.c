@@ -21,14 +21,49 @@
  * "precision reduced proportionally" behavior fall out naturally, and
  * keeps the accumulator inside q1.23).
  *
- * Undocumented micro-architecture choices live in cordic_emul_tuning.h.
+ * Undocumented micro-architecture choices live in the calibration enum
+ * below.
  * True silicon bit-exactness should be confirmed once with
  * test/device_dump (see README, "Calibration").
  */
 
 #include <stdint.h>
 #include "cordic_port.h"
-#include "cordic_emul_tuning.h"
+
+/* ----------------------------------------------------------------------
+ * Calibration knobs — every assumption about UNDOCUMENTED silicon
+ * behavior is isolated here. RM0440 documents the CORDIC's I/O behavior;
+ * ST training material (and AN5325) add that the engine datapath —
+ * shifters, adders and angle table — is 24-bit (q1.23). The remaining
+ * micro-architectural choices below are not published. After running
+ * test/device_dump on real silicon and diffing against `make vectors`,
+ * bit-exact calibration is a matter of flipping these values — not
+ * rewriting the engine. Defaults are the simplest plausible hardware
+ * choices.
+ * -------------------------------------------------------------------- */
+enum {
+    /* q1.31 -> q1.23 narrowing of input arguments:
+     * 0 = truncate (take top 24 bits, floor), 1 = round to nearest.
+     * (q1.23 -> q1.31 widening is left-shift by 8, zero fill.) */
+    CM_EMUL_NARROW_ROUND = 0,
+
+    /* Phase (atan2) result when the accumulated angle nudges past +-1.0
+     * (i.e. +-pi): RM0440 notes results "close to pi may sometimes wrap
+     * to -pi", so the default models 24-bit two's-complement wrap.
+     * 0 = saturate, 1 = wrap. */
+    CM_EMUL_PHASE_WRAP = 1,
+
+    /* Hyperbolic iteration repeat schedule (required for convergence).
+     * Standard CORDIC repeats i = 4, 13, 40, ...; with <= 24 engine
+     * steps only 4 and 13 are reachable.
+     * Angle tables: entries are round-to-nearest of atan(2^-i)/pi and
+     * atanh(2^-i) in q1.23; if silicon turns out to truncate,
+     * regenerate them truncated. Gain correction is applied as a
+     * post-multiply (vectoring) resp. seeds x0 (rotation). */
+    CM_EMUL_HYP_REPEAT_A = 4,
+    CM_EMUL_HYP_REPEAT_B = 13,
+};
+
 
 enum {
     ONE23  = 1 << 23,
@@ -64,11 +99,9 @@ enum {
 
 static inline int32_t narrow_q31(int32_t q31)
 {
-#if CM_EMUL_NARROW_ROUND
-    return (int32_t)((q31 + 0x80) >> 8);
-#else
+    if (CM_EMUL_NARROW_ROUND)
+        return (q31 + 0x80) >> 8;            /* round to nearest */
     return q31 >> 8;                         /* truncate: top 24 bits */
-#endif
 }
 
 static inline int32_t widen_sat(int32_t q23)
@@ -257,9 +290,4 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
     default:
         break;
     }
-}
-
-void cordic_backend_init(void)
-{
-    /* nothing to do on the host */
 }

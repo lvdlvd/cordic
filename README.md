@@ -5,7 +5,7 @@ coprocessor, with a bit-exact host emulation of the engine for unit
 testing on the build host.
 
 ```
-include/math.h              drop-in header (the 12 cnav functions + sincosf)
+include/math.h              drop-in header 
 src/cordic_math.c           shared frontend — float layer, backend-agnostic
 src/cordic_port.h           backend ABI (CSR image + q1.31 args/results)
 src/math_stm32.c            device backend: CORDIC registers, zero-overhead mode
@@ -130,7 +130,7 @@ corresponding knob and re-diff.
 
 ## Concurrency
 
-The CORDIC is a global resource. Per cnav's runtime guarantee (single
-thread, no floating point in IRQ handlers) `math_stm32.c` performs no
+The CORDIC is a global resource. Runtime shoul guarantee single
+thread, no floating point in IRQ handlers `math_stm32.c` performs no
 locking. If that guarantee ever changes, wrap `cordic_backend_run` in a
 critical section.

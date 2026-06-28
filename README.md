@@ -231,6 +231,35 @@ CMSIS-DSP / X-CUBE CORDIC** reference model, if one exists.
 - Re-capture after any `device_dump.c` change; keep the exact `.elf` used
   for a capture if you want to symbolize later.
 
+### Determinism — confirmed
+
+The CORDIC was re-run over the full 3531-vector set **1000×** on the
+device (`cm_dump_determinism()` in `examples/cordic`): identical result
+checksum every run, zero mismatches. So the residual is a **fixed,
+reproducible datapath quirk**, not a race/metastability — and a captured
+device vector set is a valid golden oracle.
+
+### What this means for testing cnav
+
+The host emulator is faithful to silicon **within RM0440's documented
+error floor**, not bit-for-bit:
+
+- **Bit-exact** today: `sqrtf`, `expf`/`coshf`-path (`cosh`/`sinh`), and
+  anything built only on those.
+- **Within ~1–14 ULP** (the bottom 1–2 bits of the 24-bit result):
+  `sinf`/`cosf`/`sincosf` (`cos`/`sin`), `atan2f` (`phase`), `hypotf`
+  (`mod`), `logf` (`ln`), `atanhf` (`atanh`). The bias on ln/mod/atanh is
+  one-sided (silicon slightly high).
+
+Practical guidance: **don't assert host==device bit-equality** for the
+trig/log wrappers in cnav unit tests. Either (a) compare against
+double-precision libm with the Table-115 tolerance (what `test_math.c`
+already does), or (b) if you want exact golden-vector tests, capture the
+**device** output as the golden reference (it's deterministic) rather
+than the emulator. The emulator remains a faithful host stand-in for
+behavior/accuracy testing; it is just not a bit-exact twin for the five
+non-exact functions.
+
 ## Concurrency
 
 The CORDIC is a global resource. Per cnav's runtime guarantee (single

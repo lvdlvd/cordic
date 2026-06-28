@@ -216,9 +216,17 @@ found: the **one-sided** bias on mod/ln/atanh (a *bias*, not symmetric
 rounding error, is the fingerprint of a truncation that should have
 rounded); the **z==0 → negative branch** off-by-one; and the
 **circular/hyperbolic guard asymmetry** (a uniform design wouldn't have
-one). All of it sits **within RM0440 Table 115's documented error floor
-(~2⁻²⁰…2⁻¹⁹)**, so ST had no spec reason to make it cleaner or
-round-trip-reproducible. BUT it is not noise: `cosh`/`sinh`/`sqrt` are
+one). But the decisive point is in **RM0440 Table 115, footnote (1)**:
+the engine is specified *against double-precision float*, with **"an
+additional rounding error ... of up to 2⁻²⁰ for q31 format"** and **no
+specified rounding rule.** Our results are effectively q1.23 (LSB 2⁻²³),
+so 2⁻²⁰ = 8 of the "bit-8 ULP" we measure — and our residual vs silicon
+is mostly 1–6 of those. We were never chasing a bug; we were chasing the
+explicitly-documented, unspecified 2⁻²⁰ rounding term. There is no rule
+to match. (§17.3.4 likewise documents that scaling "entails a loss of
+precision due to truncation" — the source of the scaled ln/atanh bias;
+and Table 115 fn(2) notes phase/mod precision falls with the modulus.)
+It is not noise, though: `cosh`/`sinh`/`sqrt` are
 fully bit-exact and `atan` is 23/128, so the engine is deterministic and
 largely modelable — the residual is a few concentrated quirks. Reaching
 true bit-exactness may require modelling those quirks node-by-node (or

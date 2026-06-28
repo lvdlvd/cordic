@@ -49,7 +49,7 @@ clean:
 .PHONY: all test vectors clean
 
 # ---------------------------------------------------------------------------
-# Device build (reference; integrate into the cnav build system)
+# Device build (reference; integrate into the application build system)
 #
 #   sources:  src/cordic_math.c src/math_stm32.c
 #   include:  -Iinclude -Isrc        (include/ must precede the toolchain's

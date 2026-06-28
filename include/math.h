@@ -1,10 +1,11 @@
 /*
- * math.h — drop-in for cnav's math library subproject.
+ * math.h — single-precision drop-in for the STM32G4.
  *
- * Declares the single-precision functions cnav links against. The
- * implementation is backend-selected at link time:
+ * Declares the single-precision functions the application links against.
+ * The implementation is backend-selected at link time:
  *   math_stm32.c — STM32G4 CORDIC coprocessor (device)
- *   math_emul.c  — bit-exact software model of the CORDIC engine (host)
+ *   math_emul.c  — software model of the CORDIC engine, calibrated to
+ *                  silicon (host)
  * plus the shared, backend-agnostic frontend cordic_math.c.
  *
  * Build rules for cross-host bit-equality (see README):
@@ -62,7 +63,7 @@ extern "C" {
 #define roundf   cm_roundf
 #endif
 
-/* ---- the functions cnav requires -------------------------------------- */
+/* ---- the provided single-precision functions -------------------------- */
 
 float sinf(float x);
 float cosf(float x);

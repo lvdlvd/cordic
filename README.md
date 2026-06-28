@@ -128,6 +128,72 @@ the frontend uses (plus the full documented ranges and a precision
 sweep). Any mismatch localizes to one function/scale/argument; flip the
 corresponding knob and re-diff.
 
+### Calibration status (against a real STM32G474, 2026-06)
+
+A first silicon capture (3531-record sweep, generic G474 breakout) drove
+the model from 3144 → **1528** differing records. **`cosh`, `sinh`,
+`sqrt` are bit-exact**; the rest are within ~1–14 ULP of the bottom of a
+24-bit result. Per function (differing/total):
+
+| func | diff/total | | func | diff/total |
+|------|-----------|-|------|-----------|
+| cos  | 246/400   | | cosh | **0**/256 |
+| sin  | 288/475   | | sinh | **0**/128 |
+| phase| 355/464   | | atanh| 85/128    |
+| mod  | 359/400   | | ln   | 172/512   |
+| atan | 23/128    | | sqrt | **0**/640 |
+
+What was fixed to get here (in capture order):
+
+1. **Harness determinism (not the engine).** `rq31(INT32_MIN,
+   INT32_MAX)` in `device_dump.c` combined `lo + (int32_t)off`, whose
+   signed overflow resolved differently on arm-gcc vs the host, desyncing
+   the *inputs* on every full-range sin/cos and atan draw (≈486 records).
+   Fixed to an unsigned-modular combine — **both** sides must rebuild and
+   the device must be re-captured.
+2. **Gain reciprocals truncate, not round** (`INVK_Q23`, `INVKH_Q22` in
+   the calibration enum): silicon truncates the gain-correction multiply.
+   This alone made `sqrt` bit-exact.
+3. **`NRES` contract.** `cordic_backend_run` was writing `res[1]`
+   unconditionally; hardware writes RES2 only when the CSR's NRES bit is
+   set. Single-result ops (phase/mod as the frontend issues them) now
+   leave RES2 = 0, matching silicon.
+4. **One guard bit in the angle path.** The angle accumulator `z` is
+   q1.24 (`CM_EMUL_ANGLE_GUARD = 1`) while x/y stay q1.23. Found with the
+   precision-sweep probe (below): for the angle-output functions the
+   error grows with iteration count, and a single guard bit on `z` (and
+   q1.24 angle tables) made `cosh`/`sinh` exact and roughly halved
+   `atan`/`ln`. **G=0 and G≥2 are both worse**, and a *full* q24 datapath
+   (guard bits on x/y too) is much worse — the guard bit is angle-only.
+
+### How the guard bit was localized — the precision-sweep probe
+
+The CSR PRECISION field sets iteration count (4·P, capped at 24), so the
+same input run at P=1..6 reads the silicon's result after 4,8,…,24
+iterations. `examples/cordic` (in the sibling `n-array` repo) has a
+`cm_dump_psweep()` that dumps sin+cos at P=1..6 for 64 PRNG-seeded
+inputs, bracketed by `NARRAY-PSWEEP-DUMP … END`. Reproduce the inputs
+host-side (same `xs32`/`rq31`) and find the first precision at which the
+trajectories part: divergence at P=1 ⇒ range-reduction/seed; divergence
+only at P=6 ⇒ tail-iteration accumulation. That bimodal split is what
+pointed at the angle accumulator.
+
+### Open threads (for the next pass)
+
+- **cos/sin/phase/mod residual (~250–360 each).** The decisions are now
+  right (guard bit), x/y are q1.23, yet the x/y *outputs* still drift.
+  Next suspects: the seed `mul_q23(m, INVK)` rounding, or a guard bit
+  that affects the x/y *carry* without widening their storage.
+- **`atanh`/`ln` still 85/172.** Hyperbolic vectoring z-output; likely a
+  second-order guard/scale effect (these run at SCALE≥1).
+- **Unexplained asymmetry.** `cosh`/`sinh` only reach exact when `z` is
+  loaded with a *zero* guard bit (`a1 << GUARD`), whereas sin/cos need
+  the *real* guard bit (`z_from_angle`). Both run different SCALE (0 vs
+  1); a SCALE/guard interaction in the angle load is the likely cause and
+  is worth modelling explicitly rather than special-casing.
+- Re-capture after any `device_dump.c` change; keep the exact `.elf` used
+  for a capture if you want to symbolize later.
+
 ## Concurrency
 
 The CORDIC is a global resource. Per cnav's runtime guarantee (single

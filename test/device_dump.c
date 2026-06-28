@@ -40,8 +40,13 @@ static uint32_t xs32(void)
  * generation is pure integer to keep the vector set platform-exact) */
 static int32_t rq31(int32_t lo, int32_t hi)
 {
+    /* Combine in unsigned/64-bit so the full-range case rq31(INT32_MIN,
+     * INT32_MAX) is platform-exact. The old `lo + (int32_t)offset` signed
+     * combine overflowed/resolved differently on the device (arm-gcc) vs the
+     * host, desyncing the vector set on the sin/cos and atan full-range draws. */
     uint64_t span = (uint64_t)((int64_t)hi - lo);
-    return lo + (int32_t)(((uint64_t)xs32() * (span + 1)) >> 32);
+    uint32_t off  = (uint32_t)(((uint64_t)xs32() * (span + 1)) >> 32);
+    return (int32_t)((uint32_t)lo + off);
 }
 
 static void run1(uint32_t csr, int32_t a1, int32_t a2)

@@ -70,29 +70,48 @@ enum {
     HALF23 = 1 << 22,
 };
 
+/* The silicon carries a guard bit in the ANGLE accumulator z: it is q1.(23+G)
+ * while x/y stay q1.23. G=1 was found by capture (it makes cosh/sinh bit-exact
+ * and moves atan/atanh/ln toward exact); G=0 and G>=2 are both worse — see the
+ * README "CORDIC silicon calibration". The angle tables above are q1.(23+G), so
+ * changing G means regenerating them. */
+enum {
+    CM_EMUL_ANGLE_GUARD = 1,
+    ZHALF = 1 << (22 + CM_EMUL_ANGLE_GUARD),  /* 0.5 in the z domain */
+};
+/* load a q1.31 angle into the q1.(23+G) accumulator, keeping G guard bits */
+static inline int32_t z_from_angle(int32_t q31) { return q31 >> (8 - CM_EMUL_ANGLE_GUARD); }
+/* a vectoring angle result lives in z (q1.(23+G)); drop the guard for output */
+static inline int32_t z_to_q23(int32_t z) { return z >> CM_EMUL_ANGLE_GUARD; }
+
 /* compile-time sanity: we rely on arithmetic right shift */
 typedef char cm_assert_arith_shift[((-1) >> 1 == -1) ? 1 : -1];
 
-/* ---- q1.23 tables (round-to-nearest; see tuning header) -------------- */
+/* ---- angle tables (round-to-nearest; see tuning header) -------------- */
+/* These live in the ANGLE path (z), which carries one guard bit, so they are
+ * q1.(23+CM_EMUL_ANGLE_GUARD) = q1.24. x/y never use them and stay q1.23. */
 
-/* atan(2^-i)/pi, q1.23, i = 0..23 */
+/* atan(2^-i)/pi, q1.24, i = 0..23 */
 static const int32_t cm_atan_tab[24] = {
-    2097152, 1238021, 654136, 332050, 166669, 83416, 41718, 20860,
-    10430, 5215, 2608, 1304, 652, 326, 163, 81,
-    41, 20, 10, 5, 3, 1, 1, 0,
+    4194304, 2476042, 1308273, 664100, 333339, 166832, 83436, 41721,
+    20861, 10430, 5215, 2608, 1304, 652, 326, 163,
+    81, 41, 20, 10, 5, 3, 1, 1,
 };
 
-/* atanh(2^-i), radians, q1.23, i = 1..24 ([0] unused) */
+/* atanh(2^-i), q1.24, i = 1..24 ([0] unused) */
 static const int32_t cm_atanh_tab[25] = {
-    0,
-    4607914, 2142558, 1054089, 524972, 262229, 131083, 65537, 32768,
-    16384, 8192, 4096, 2048, 1024, 512, 256, 128,
-    64, 32, 16, 8, 4, 2, 1, 1,
+    0, 9215828, 4285116, 2108178, 1049945, 524459, 262165, 131075,
+    65536, 32768, 16384, 8192, 4096, 2048, 1024, 512,
+    256, 128, 64, 32, 16, 8, 4, 2,
+    1,
 };
 
 enum {
-    INVK_Q23  = 5094007,  /* 1/K  = 0.6072529350088813 (circular gain),   q1.23 */
-    INVKH_Q22 = 5064610,  /* 1/Kh = 1.2074970677630608 (hyperbolic gain), q2.22 */
+    /* Gain reciprocals, TRUNCATED to q-format (not round-to-nearest): silicon
+     * truncates the gain-correction multiply, so the calibrated capture matches
+     * floor, not round. (round-to-nearest would be 5094007 / 5064610.) */
+    INVK_Q23  = 5094006,  /* 1/K  = 0.6072529350088813 (circular gain),   q1.23 */
+    INVKH_Q22 = 5064609,  /* 1/Kh = 1.2074970677630608 (hyperbolic gain), q2.22 */
 };
 
 /* ---- fixed-point primitives ------------------------------------------ */
@@ -128,7 +147,7 @@ static inline int32_t mul_q22(int32_t a, int32_t b)
 
 /* ---- circular mode ---------------------------------------------------- */
 
-/* Rotation: input angle/pi (q1.23, [-1,1)) and modulus m (q1.23).
+/* Rotation: angle/pi (q1.(23+G), [-1,1)) in z, modulus m (q1.23).
  * Outputs m*cos and m*sin in q1.23. */
 static void circ_rot(int32_t theta, int32_t m, int iters,
                      int32_t *xc, int32_t *ys)
@@ -139,8 +158,8 @@ static void circ_rot(int32_t theta, int32_t m, int iters,
     int i;
 
     /* quadrant pre-rotation: bring |z| <= 0.5 (converge bound 0.5549) */
-    if (z > HALF23)       { int32_t t = x; x = -y; y = t;  z -= HALF23; }
-    else if (z < -HALF23) { int32_t t = x; x = y;  y = -t; z += HALF23; }
+    if (z > ZHALF)       { int32_t t = x; x = -y; y = t;  z -= ZHALF; }
+    else if (z < -ZHALF) { int32_t t = x; x = y;  y = -t; z += ZHALF; }
 
     for (i = 0; i < iters && i < 24; i++) {
         int32_t xs = x >> i, yss = y >> i;
@@ -151,8 +170,8 @@ static void circ_rot(int32_t theta, int32_t m, int iters,
     *ys = y;
 }
 
-/* Vectoring: inputs (x, y) q1.23; outputs angle/pi (q1.23 value,
- * may transiently exceed +-1 by < 2^-22) and K*modulus. */
+/* Vectoring: inputs (x, y) q1.23; outputs angle/pi in z (q1.(23+G), may
+ * transiently exceed +-1 by < 2^-22) and K*modulus (q1.23). */
 static void circ_vec(int32_t x, int32_t y, int scale, int iters,
                      int32_t *zout, int32_t *mout)
 {
@@ -162,8 +181,8 @@ static void circ_vec(int32_t x, int32_t y, int scale, int iters,
     /* pre-rotation into the right half-plane */
     if (x < 0) {
         int32_t t = x;
-        if (y >= 0) { x = y;  y = -t; z = HALF23; }
-        else        { x = -y; y = t;  z = -HALF23; }
+        if (y >= 0) { x = y;  y = -t; z = ZHALF; }
+        else        { x = -y; y = t;  z = -ZHALF; }
     }
 
     for (i = 0; i < iters && i < 24; i++) {
@@ -221,7 +240,7 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
     case CM_FUNC_COS:
     case CM_FUNC_SIN: {
         int32_t c, s;
-        circ_rot(a1, a2, iters, &c, &s);
+        circ_rot(z_from_angle(args[0]), a2, iters, &c, &s); /* z keeps the guard bit */
         if (func == CM_FUNC_COS) { res[0] = widen_sat(c); res[1] = widen_sat(s); }
         else                     { res[0] = widen_sat(s); res[1] = widen_sat(c); }
         break;
@@ -230,9 +249,10 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
     case CM_FUNC_PHASE:
     case CM_FUNC_MOD: {
         int32_t ph, m;
-        circ_vec(a1, a2, 0, iters, &ph, &m);
+        circ_vec(a1, a2, 0, iters, &ph, &m);     /* ph is q1.(23+G) */
         {
-            int32_t phw = CM_EMUL_PHASE_WRAP ? widen_wrap(ph) : widen_sat(ph);
+            int32_t phq = z_to_q23(ph);
+            int32_t phw = CM_EMUL_PHASE_WRAP ? widen_wrap(phq) : widen_sat(phq);
             int32_t mw  = widen_sat(m);      /* RM: saturates to 1 */
             if (func == CM_FUNC_PHASE) { res[0] = phw; res[1] = mw; }
             else                       { res[0] = mw;  res[1] = phw; }
@@ -241,7 +261,7 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
     }
 
     case CM_FUNC_ATAN:
-        /* vector (2^-n, x*2^-n); z accumulates atan(x)/pi * 2^-n */
+        /* vector (2^-n, x*2^-n); z accumulates atan(x)/pi * 2^-n (q1.(23+G)) */
         x = ONE23 >> scale; y = a1; z = 0;
         {
             int i;
@@ -251,13 +271,18 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
                 else        { x -= ys; y += xs; z -= cm_atan_tab[i] >> scale; }
             }
         }
-        res[0] = widen_sat(z);
+        res[0] = widen_sat(z_to_q23(z));
         break;
 
     case CM_FUNC_COSH:
     case CM_FUNC_SINH:
         x = INVKH_Q22 >> (scale >= 1 ? scale - 1 : 0);  /* (1/Kh)*2^-n, q1.23 */
-        y = 0; z = a1;
+        y = 0;
+        /* cosh/sinh load z from the q1.23 angle lifted into the guard domain
+         * with a ZERO guard bit (NOT z_from_angle's real guard) — empirically
+         * this is what makes them bit-exact. The asymmetry vs sin/cos (which use
+         * the real guard bit) is unexplained; see README, open question. */
+        z = a1 << CM_EMUL_ANGLE_GUARD;
         hyp_engine(&x, &y, &z, 0, scale, iters);
         if (func == CM_FUNC_COSH) { res[0] = widen_sat(x); res[1] = widen_sat(y); }
         else                      { res[0] = widen_sat(y); res[1] = widen_sat(x); }
@@ -266,7 +291,7 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
     case CM_FUNC_ATANH:
         x = ONE23 >> scale; y = a1; z = 0;
         hyp_engine(&x, &y, &z, 1, scale, iters);
-        res[0] = widen_sat(z);
+        res[0] = widen_sat(z_to_q23(z));
         break;
 
     case CM_FUNC_LN:
@@ -275,7 +300,7 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
         y = a1 - (ONE23 >> scale);
         z = 0;
         hyp_engine(&x, &y, &z, 1, scale, iters);
-        res[0] = widen_sat(z);
+        res[0] = widen_sat(z_to_q23(z));
         break;
 
     case CM_FUNC_SQRT:
@@ -290,4 +315,11 @@ void cordic_backend_run(uint32_t csr, const int32_t args[2], int32_t res[2])
     default:
         break;
     }
+
+    /* Honor the CSR result count: hardware writes RES2 only when NRES is set
+     * (cordic_port.h). Single-result ops (e.g. phase/mod as issued by the
+     * frontend) leave RES2 unread/zero — match that instead of always emitting
+     * the second engine output. */
+    if (!(csr & CM_CSR_NRES))
+        res[1] = 0;
 }

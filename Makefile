@@ -31,9 +31,10 @@ $(BUILD)/%.o: src/%.c src/cordic_port.h include/math.h | $(BUILD)
 $(BUILD)/test_math: test/test_math.c $(LIBOBJS)
 	$(CC) $(CFLAGS) $^ -lm -o $@
 
-# vector dumper, host flavor (emulated backend)
+# vector dumper, host flavor (emulated backend). device_dump.c is byte-identical
+# to n-array/examples/cordic/device_dump.c; CM_DUMP_HOST selects stdio output.
 $(BUILD)/dump_emul: test/device_dump.c $(BUILD)/math_emul.o
-	$(CC) $(CFLAGS) $(INC) $^ -o $@
+	$(CC) $(CFLAGS) $(INC) -DCM_DUMP_HOST $^ -o $@
 
 test: $(BUILD)/test_math
 	./$(BUILD)/test_math

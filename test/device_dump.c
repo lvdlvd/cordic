@@ -15,17 +15,23 @@
  * localized to a FUNC/SCALE/argument and resolved via the knobs in
  * the calibration enum in math_emul.c (see README, "Calibration").
  *
- * On the device, provide putchar-level output by defining
- * cm_dump_putc(), or rely on a retargeted printf and the default below.
+ * This file is byte-identical in cordic-math (test/device_dump.c) and
+ * n-array (examples/cordic/device_dump.c). The only build difference is the
+ * output path: define CM_DUMP_HOST for the host build (stdio printf, provides
+ * main), leave it unset for the device build (the tiny tprintf, with main
+ * supplied by the app via -DCM_DUMP_NO_MAIN). cordic_port.h and tprintf.h are
+ * resolved from each project's include path.
  */
 
 #include <stdint.h>
-#include <stdio.h>
-#include "../src/cordic_port.h"
-
-#ifndef CM_DUMP_PRINTF
-#define CM_DUMP_PRINTF printf
+#ifdef CM_DUMP_HOST
+#  include <stdio.h>
+#  define CM_DUMP_PRINTF printf
+#else
+#  include "tprintf.h"
+#  define CM_DUMP_PRINTF tprintf
 #endif
+#include "cordic_port.h"
 
 static uint32_t st = 0x5EED5EEDu;
 
@@ -49,12 +55,20 @@ static int32_t rq31(int32_t lo, int32_t hi)
     return (int32_t)((uint32_t)lo + off);
 }
 
+static uint32_t cm_csum;      /* FNV-1a accumulator for the determinism check */
+static int      cm_csum_mode; /* when set, run1 folds results instead of printing */
+
 static void run1(uint32_t csr, int32_t a1, int32_t a2)
 {
     int32_t args[2], res[2] = { 0, 0 };
     args[0] = a1;
     args[1] = a2;
     cordic_backend_run(csr, args, res);
+    if (cm_csum_mode) {
+        cm_csum = (cm_csum ^ (uint32_t)res[0]) * 16777619u;
+        cm_csum = (cm_csum ^ (uint32_t)res[1]) * 16777619u;
+        return;
+    }
     CM_DUMP_PRINTF("%08X %08X %08X %08X %08X\n",
                    (unsigned)csr, (unsigned)a1, (unsigned)a2,
                    (unsigned)res[0], (unsigned)res[1]);
@@ -145,6 +159,56 @@ int cm_dump_main(void)
     }
 
     return 0;
+}
+
+/* Diagnostic: precision sweep. For each of N random (angle, modulus) pairs,
+ * run sin AND cos at PRECISION 1..6 (= 4,8,12,16,20,24 iterations). Lets the
+ * host find the exact iteration at which the software model and the silicon
+ * first diverge. Same seed/PRNG as cm_dump_main so the host can reproduce the
+ * inputs exactly. */
+void cm_dump_psweep(void)
+{
+    int n;
+    unsigned p;
+
+    st = 0x5EED5EEDu;
+    for (n = 0; n < 64; n++) {
+        int32_t th = rq31(INT32_MIN, INT32_MAX);
+        int32_t m  = rq31(0, INT32_MAX);
+        for (p = 1; p <= 6; p++) {
+            run1(cm_csr(CM_FUNC_SIN, p, 0, 1, 1), th, m);
+            run1(cm_csr(CM_FUNC_COS, p, 0, 1, 1), th, m);
+        }
+    }
+}
+
+/* Determinism check: re-run the full deterministic vector set `runs` times and
+ * confirm every run yields the identical result checksum. A varying checksum
+ * would mean a CORDIC result depends on something other than its inputs
+ * (race/metastability) — i.e. the residual vs the host model could not be a
+ * fixed datapath quirk. Prints one DET-DONE line (or DET-FAIL on any mismatch). */
+void cm_dump_determinism(unsigned runs)
+{
+    uint32_t ref = 0;
+    unsigned r;
+
+    unsigned fails = 0;
+
+    cm_csum_mode = 1;              /* run1 folds results into cm_csum, prints nothing */
+    for (r = 0; r < runs; r++) {
+        cm_csum = 2166136261u;     /* FNV-1a offset basis */
+        cm_dump_main();            /* re-run the whole vector set into cm_csum */
+        if (r == 0)
+            ref = cm_csum;
+        else if (cm_csum != ref)
+            fails++;
+        if (((r + 1) % 100) == 0)  /* progress only — not the vectors */
+            CM_DUMP_PRINTF("  DET %u/%u checksum %08X mismatches %u\n",
+                           r + 1, runs, (unsigned)ref, fails);
+    }
+    cm_csum_mode = 0;
+    CM_DUMP_PRINTF("DET-DONE %u runs, checksum %08X, %u mismatches\n",
+                   runs, (unsigned)ref, fails);
 }
 
 #ifndef CM_DUMP_NO_MAIN

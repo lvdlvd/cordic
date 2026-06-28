@@ -1,11 +1,11 @@
 # cordic-math
 
-`math.h` drop-in for cnav on the STM32G4, backed by the CORDIC
-coprocessor, with a bit-exact host emulation of the engine for unit
-testing on the build host.
+A single-precision `math.h` for the STM32G4, backed by the CORDIC
+coprocessor, with a host emulation of the engine — calibrated to silicon
+within its documented error floor — for unit testing on the build host.
 
 ```
-include/math.h              drop-in header (the 12 cnav functions + sincosf)
+include/math.h              drop-in header (12 single-precision functions + sincosf)
 src/cordic_math.c           shared frontend — float layer, backend-agnostic
 src/cordic_port.h           backend ABI (CSR image + q1.31 args/results)
 src/math_stm32.c            device backend: CORDIC registers, zero-overhead mode
@@ -222,20 +222,26 @@ additional rounding error ... of up to 2⁻²⁰ for q31 format"** and **no
 specified rounding rule.** Our results are effectively q1.23 (LSB 2⁻²³),
 so 2⁻²⁰ = 8 of the "bit-8 ULP" we measure — and our residual vs silicon
 is mostly 1–6 of those. We were never chasing a bug; we were chasing the
-explicitly-documented, unspecified 2⁻²⁰ rounding term. There is no rule
-to match. (§17.3.4 likewise documents that scaling "entails a loss of
-precision due to truncation" — the source of the scaled ln/atanh bias;
-and Table 115 fn(2) notes phase/mod precision falls with the modulus.)
-It is not noise, though: `cosh`/`sinh`/`sqrt` are
-fully bit-exact and `atan` is 23/128, so the engine is deterministic and
-largely modelable — the residual is a few concentrated quirks. Reaching
-true bit-exactness may require modelling those quirks node-by-node (or
-exhaustive per-(func,scale,iteration) characterization) rather than a
-prettier closed form. Cheap confirmations worth running on the board:
-(1) **determinism** — same input × N, identical bits? (2) **cross-part /
-cross-family** — does another G4 (or G0/L5/H7) emit the same bits? If
-revisions differ, it's silicon-rev-specific. (3) diff against **ST's own
-CMSIS-DSP / X-CUBE CORDIC** reference model, if one exists.
+explicitly-documented, unspecified 2⁻²⁰ rounding term. There is no
+*published* rule to match — only the ≤2⁻²⁰ bound. (§17.3.4 likewise
+documents that scaling "entails a loss of precision due to truncation" —
+the source of the scaled ln/atanh bias; and Table 115 fn(2) notes
+phase/mod precision falls with the modulus.)
+
+It is not noise, and not unrecoverable: `cosh`/`sinh`/`sqrt` are fully
+bit-exact, `atan` is 23/128, and the engine is **confirmed deterministic**
+(see below) — so it *does* implement some fixed bit-rule. That rule is
+reconstructable in principle, just not from random sweeps. The honest
+path would be **adversarial test vectors**: inputs hand-built to land a
+chosen iteration's z (or x/y) exactly on a decision/rounding boundary, so
+each capture pins down one node of the rule. The 4-iterations-per-clock
+granularity hides the intermediate trace, so you'd reconstruct the
+input→output rule rather than watch it — a real project, and **not worth
+it** while the residual is inside the spec's ≤2⁻²⁰ budget. If anyone ever
+does chase it, the cheap first checks are a **cross-part/cross-family**
+capture (does another G4 — or G0/L5/H7 — emit the same bits? differing
+revisions ⇒ rev-specific) and a diff against **ST's own CMSIS-DSP /
+X-CUBE CORDIC** reference model.
 - Re-capture after any `device_dump.c` change; keep the exact `.elf` used
   for a capture if you want to symbolize later.
 
@@ -247,30 +253,29 @@ checksum every run, zero mismatches. So the residual is a **fixed,
 reproducible datapath quirk**, not a race/metastability — and a captured
 device vector set is a valid golden oracle.
 
-### What this means for testing cnav
+### Using the emulator as a test oracle
 
 The host emulator is faithful to silicon **within RM0440's documented
 error floor**, not bit-for-bit:
 
-- **Bit-exact** today: `sqrtf`, `expf`/`coshf`-path (`cosh`/`sinh`), and
-  anything built only on those.
+- **Bit-exact** today: `sqrtf`, the `expf`/`coshf` path (`cosh`/`sinh`),
+  and anything built only on those.
 - **Within ~1–14 ULP** (the bottom 1–2 bits of the 24-bit result):
   `sinf`/`cosf`/`sincosf` (`cos`/`sin`), `atan2f` (`phase`), `hypotf`
   (`mod`), `logf` (`ln`), `atanhf` (`atanh`). The bias on ln/mod/atanh is
   one-sided (silicon slightly high).
 
 Practical guidance: **don't assert host==device bit-equality** for the
-trig/log wrappers in cnav unit tests. Either (a) compare against
-double-precision libm with the Table-115 tolerance (what `test_math.c`
-already does), or (b) if you want exact golden-vector tests, capture the
-**device** output as the golden reference (it's deterministic) rather
-than the emulator. The emulator remains a faithful host stand-in for
-behavior/accuracy testing; it is just not a bit-exact twin for the five
-non-exact functions.
+trig/log wrappers. Either (a) compare against double-precision libm with
+the Table-115 tolerance (what `test_math.c` does), or (b) for exact
+golden-vector tests, capture the **device** output as the golden
+reference (it's deterministic) rather than the emulator. The emulator
+remains a faithful host stand-in for behavior/accuracy testing; it is
+just not a bit-exact twin for the five non-exact functions.
 
 ## Concurrency
 
-The CORDIC is a global resource. Per cnav's runtime guarantee (single
-thread, no floating point in IRQ handlers) `math_stm32.c` performs no
-locking. If that guarantee ever changes, wrap `cordic_backend_run` in a
-critical section.
+The CORDIC is a global resource. Given the caller's runtime guarantee
+(single thread, no floating point in IRQ handlers) `math_stm32.c`
+performs no locking. If that guarantee ever changes, wrap
+`cordic_backend_run` in a critical section.

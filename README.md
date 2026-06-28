@@ -131,14 +131,14 @@ corresponding knob and re-diff.
 ### Calibration status (against a real STM32G474, 2026-06)
 
 A first silicon capture (3531-record sweep, generic G474 breakout) drove
-the model from 3144 → **1528** differing records. **`cosh`, `sinh`,
+the model from 3144 → **1492** differing records. **`cosh`, `sinh`,
 `sqrt` are bit-exact**; the rest are within ~1–14 ULP of the bottom of a
 24-bit result. Per function (differing/total):
 
 | func | diff/total | | func | diff/total |
 |------|-----------|-|------|-----------|
-| cos  | 246/400   | | cosh | **0**/256 |
-| sin  | 288/475   | | sinh | **0**/128 |
+| cos  | 209/400   | | cosh | **0**/256 |
+| sin  | 289/475   | | sinh | **0**/128 |
 | phase| 355/464   | | atanh| 85/128    |
 | mod  | 359/400   | | ln   | 172/512   |
 | atan | 23/128    | | sqrt | **0**/640 |
@@ -165,6 +165,9 @@ What was fixed to get here (in capture order):
    q1.24 angle tables) made `cosh`/`sinh` exact and roughly halved
    `atan`/`ln`. **G=0 and G≥2 are both worse**, and a *full* q24 datapath
    (guard bits on x/y too) is much worse — the guard bit is angle-only.
+5. **Rotation decision is `z > 0`, not `z >= 0`** (z==0 takes the
+   negative branch). −36 cos mismatches. Silicon derives the micro-
+   rotation direction from a subtract/borrow, not a plain `z[MSB]` test.
 
 ### How the guard bit was localized — the precision-sweep probe
 
@@ -178,19 +181,53 @@ trajectories part: divergence at P=1 ⇒ range-reduction/seed; divergence
 only at P=6 ⇒ tail-iteration accumulation. That bimodal split is what
 pointed at the angle accumulator.
 
+### Ruled out (tested against the capture, all worse or no help)
+
+More than one angle guard bit (G≥2); guard bits on x/y (full q24);
+toward-zero / round-half-up / round-half-even barrel shift (plain
+arithmetic `floor` is correct); negate-before-shift in the add/sub;
+rounding the guard bit at output; rounding the per-iteration
+`table >> scale`; accumulate-angle-then-shift; rounding the seed/gain
+multiply; vectoring (`y`-sign) and pre-rotation tie-breaks. The only
+levers that helped were the five fixes above.
+
 ### Open threads (for the next pass)
 
-- **cos/sin/phase/mod residual (~250–360 each).** The decisions are now
-  right (guard bit), x/y are q1.23, yet the x/y *outputs* still drift.
-  Next suspects: the seed `mul_q23(m, INVK)` rounding, or a guard bit
-  that affects the x/y *carry* without widening their storage.
-- **`atanh`/`ln` still 85/172.** Hyperbolic vectoring z-output; likely a
-  second-order guard/scale effect (these run at SCALE≥1).
-- **Unexplained asymmetry.** `cosh`/`sinh` only reach exact when `z` is
-  loaded with a *zero* guard bit (`a1 << GUARD`), whereas sin/cos need
-  the *real* guard bit (`z_from_angle`). Both run different SCALE (0 vs
-  1); a SCALE/guard interaction in the angle load is the likely cause and
-  is worth modelling explicitly rather than special-casing.
+- **cos/sin residual (~209/289).** Genuine decision flips — the `z>0`
+  fix removed the z==0 ties but some remain, so there is a *second*
+  decision subtlety (another comparator boundary, or the pre-rotation).
+- **mod / ln / atanh: systematic ONE-SIGN bias** (silicon > emul by
+  1–6 / 1–2 / small). Not random — these read off an accumulator that the
+  emul leaves slightly low. But no global rounding/guard knob fixes it,
+  and it's input-dependent (only some records, by +1/+2), i.e. it looks
+  like a *specific internal truncation node*, not a clean output round.
+- **phase:** a handful of catastrophic ±2²⁴ disagreements (wrap direction
+  near ±π — RM0440 admits this is non-deterministic-looking) plus small
+  rounding.
+- **Unexplained circular/hyperbolic asymmetry** in the z guard-bit load
+  (sin/cos real guard, cosh/sinh zero guard) — likely a SCALE/guard
+  interaction worth modelling rather than special-casing.
+
+### Is the RTL just buggy / non-ideal?
+
+Plausibly, in part — and it changes the target. Signs that the residual
+is implementation artifact rather than a clean math model we haven't
+found: the **one-sided** bias on mod/ln/atanh (a *bias*, not symmetric
+rounding error, is the fingerprint of a truncation that should have
+rounded); the **z==0 → negative branch** off-by-one; and the
+**circular/hyperbolic guard asymmetry** (a uniform design wouldn't have
+one). All of it sits **within RM0440 Table 115's documented error floor
+(~2⁻²⁰…2⁻¹⁹)**, so ST had no spec reason to make it cleaner or
+round-trip-reproducible. BUT it is not noise: `cosh`/`sinh`/`sqrt` are
+fully bit-exact and `atan` is 23/128, so the engine is deterministic and
+largely modelable — the residual is a few concentrated quirks. Reaching
+true bit-exactness may require modelling those quirks node-by-node (or
+exhaustive per-(func,scale,iteration) characterization) rather than a
+prettier closed form. Cheap confirmations worth running on the board:
+(1) **determinism** — same input × N, identical bits? (2) **cross-part /
+cross-family** — does another G4 (or G0/L5/H7) emit the same bits? If
+revisions differ, it's silicon-rev-specific. (3) diff against **ST's own
+CMSIS-DSP / X-CUBE CORDIC** reference model, if one exists.
 - Re-capture after any `device_dump.c` change; keep the exact `.elf` used
   for a capture if you want to symbolize later.
 

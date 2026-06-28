@@ -161,10 +161,14 @@ static void circ_rot(int32_t theta, int32_t m, int iters,
     if (z > ZHALF)       { int32_t t = x; x = -y; y = t;  z -= ZHALF; }
     else if (z < -ZHALF) { int32_t t = x; x = y;  y = -t; z += ZHALF; }
 
+    /* Direction from the sign of z, with z==0 taking the NEGATIVE branch
+     * (z > 0, not z >= 0) — matches silicon, which derives the direction from a
+     * subtract/borrow rather than a plain z[MSB] test. Worth ~36 fewer cos
+     * mismatches. See README. */
     for (i = 0; i < iters && i < 24; i++) {
         int32_t xs = x >> i, yss = y >> i;
-        if (z >= 0) { x -= yss; y += xs; z -= cm_atan_tab[i]; }
-        else        { x += yss; y -= xs; z += cm_atan_tab[i]; }
+        if (z > 0) { x -= yss; y += xs; z -= cm_atan_tab[i]; }
+        else       { x += yss; y -= xs; z += cm_atan_tab[i]; }
     }
     *xc = x;
     *ys = y;
